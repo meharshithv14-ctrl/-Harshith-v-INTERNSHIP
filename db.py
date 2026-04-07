@@ -1,50 +1,114 @@
+"""
+db.py — Database Connection Module
+====================================
+Centralised database access for the HMS Flask backend.
+
+Configuration priority (highest → lowest):
+  1. Environment variables  (recommended for production)
+  2. .env file              (pip install python-dotenv)
+  3. Hard-coded defaults    (development only)
+
+Environment variables:
+  HMS_DB_SERVER   — SQL Server host, e.g. localhost\\SQLEXPRESS
+  HMS_DB_NAME     — Database name, default HospitalManagementSystem
+  HMS_DB_DRIVER   — ODBC driver string
+  HMS_DB_USER     — SQL Server login (leave empty for Windows auth)
+  HMS_DB_PASSWORD — SQL Server password (leave empty for Windows auth)
+
+Usage:
+  from db import get_db, row_to_dict
+
+  conn = get_db()
+  cur  = conn.cursor()
+  cur.execute("SELECT * FROM Patients WHERE IsActive = 1")
+  rows = [row_to_dict(cur, r) for r in cur.fetchall()]
+  cur.close()
+  conn.close()
+"""
+
+import os
+import datetime
 import pyodbc
 
-# Database Configuration
-server = r"LAPTOP-OGJ9GR0I\SQLEXPRESS"  # Update this with your server name
-database = "HospitalManagementSystem"
-driver = "{ODBC Driver 17 for SQL Server}"
+# ── Try to load .env if python-dotenv is installed ──────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed — use env vars or defaults
 
-def get_db_connection():
+# ── Connection settings ──────────────────────────────────────
+DB_SERVER   = os.getenv("HMS_DB_SERVER",   r"LAPTOP-OGJ9GR0I\SQLEXPRESS")
+DB_NAME     = os.getenv("HMS_DB_NAME",     "HospitalManagementSystem")
+DB_DRIVER   = os.getenv("HMS_DB_DRIVER",   "{ODBC Driver 17 for SQL Server}")
+DB_USER     = os.getenv("HMS_DB_USER",     "")      # empty = Windows auth
+DB_PASSWORD = os.getenv("HMS_DB_PASSWORD", "")
+
+# ── Build connection string ──────────────────────────────────
+def _build_conn_str() -> str:
+    base = (
+        f"DRIVER={DB_DRIVER};"
+        f"SERVER={DB_SERVER};"
+        f"DATABASE={DB_NAME};"
+    )
+    if DB_USER and DB_PASSWORD:
+        # SQL Server authentication
+        return base + f"UID={DB_USER};PWD={DB_PASSWORD};"
+    else:
+        # Windows / Trusted Connection authentication
+        return base + "Trusted_Connection=yes;"
+
+
+def get_db() -> pyodbc.Connection:
     """
-    Creates and returns a database connection.
-    Raises an exception if connection fails.
+    Open and return a new pyodbc connection.
+    autocommit=False — callers must call conn.commit() or conn.rollback().
+    Always close the connection in a finally block.
     """
     try:
-        connection_string = (
-            f"DRIVER={driver};"
-            f"SERVER={server};"
-            f"DATABASE={database};"
-            f"Trusted_Connection=yes;"
-        )
-        
-        conn = pyodbc.connect(connection_string)
-        conn.autocommit = False  # Use manual commit for better control
+        conn = pyodbc.connect(_build_conn_str(), autocommit=False)
         return conn
-        
-    except pyodbc.Error as e:
-        print(f"Database connection error: {e}")
-        raise Exception("Unable to connect to database. Please check your configuration.")
+    except pyodbc.Error as exc:
+        raise ConnectionError(
+            f"Cannot connect to SQL Server at '{DB_SERVER}/{DB_NAME}'. "
+            f"Check DB_SERVER, ODBC driver, and Windows auth settings.\n"
+            f"Original error: {exc}"
+        ) from exc
 
 
-def test_connection():
+def row_to_dict(cursor: pyodbc.Cursor, row: pyodbc.Row) -> dict:
     """
-    Test the database connection.
-    Returns True if successful, False otherwise.
+    Convert a pyodbc Row to a JSON-serialisable dict.
+    Handles: datetime → ISO string, bytes → hex string, everything else as-is.
+    """
+    result: dict = {}
+    for i, col in enumerate(cursor.description):
+        val = row[i]
+        if isinstance(val, (datetime.datetime, datetime.date)):
+            val = val.isoformat()
+        elif isinstance(val, bytes):
+            val = val.hex()
+        result[col[0]] = val
+    return result
+
+
+def test_connection() -> bool:
+    """
+    Quick connectivity check. Returns True on success, False on failure.
+    Safe to call at startup.
     """
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        cursor.close()
+        conn = get_db()
+        cur  = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
         conn.close()
-        print("✅ Database connection successful!")
+        print(f"✅ Database connection OK  →  {DB_SERVER} / {DB_NAME}")
         return True
-    except Exception as e:
-        print(f"❌ Database connection failed: {e}")
+    except Exception as exc:
+        print(f"❌ Database connection FAILED: {exc}")
         return False
 
 
 if __name__ == "__main__":
-    # Test the connection when running this file directly
     test_connection()
