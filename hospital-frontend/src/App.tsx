@@ -23,11 +23,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Activity, User, Users, FileText, PlusCircle, LogOut,
   Shield, Stethoscope, Heart, Upload, Download, FileImage, UserPlus,
-  Pill, CheckCircle, Clock, Calendar, Phone, Mail, MapPin,
+  Pill, CheckCircle, Clock, Calendar, Phone, Mail,
   Eye, EyeOff, AlertCircle, Edit2, Trash2, Key, X, Save,
-  ClipboardList, ScanLine, ChevronDown, ChevronUp, BookOpen,
+  ClipboardList, ScanLine, ChevronDown, BookOpen,
   Sun, Moon, Palette, TrendingUp, BarChart2, Zap,
-  FlaskConical, Bell, LineChart, RefreshCw, Plus, ChevronLeft, ChevronRight,
+  Cloud, Trees, Flame,
+  FlaskConical, Bell, RefreshCw, Plus, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import './App.css';
 
@@ -52,17 +53,24 @@ interface ThemeDef {
 }
 
 const THEMES: ThemeDef[] = [
-  { key:'midnight', label:'Midnight',  icon:<Moon   size={13}/>, swatch:'linear-gradient(135deg,#06b6d4,#8b5cf6)' },
-  { key:'aurora',   label:'Aurora',    icon:<Zap    size={13}/>, swatch:'linear-gradient(135deg,#c084fc,#f472b6)' },
-  { key:'daybreak', label:'Daybreak',  icon:<Sun    size={13}/>, swatch:'linear-gradient(135deg,#0284c7,#7c3aed)' },
-  { key:'forest',   label:'Forest',    icon:<Activity size={13}/>, swatch:'linear-gradient(135deg,#10b981,#f59e0b)' },
-  { key:'ember',    label:'Ember',     icon:<Zap    size={13}/>, swatch:'linear-gradient(135deg,#f59e0b,#f43f5e)' },
+  { key:'midnight', label:'Midnight',  icon:<Moon size={13}/>, swatch:'linear-gradient(135deg,#00d4ff,#0099bb)' },
+  { key:'aurora', label:'Aurora',  icon:<Cloud size={13}/>, swatch:'linear-gradient(135deg,#c471ed,#9b51c0)' },
+  { key:'daybreak', label:'Daybreak',  icon:<Sun size={13}/>, swatch:'linear-gradient(135deg,#0075d1,#005eaa)' },
+  { key:'forest', label:'Forest',  icon:<Trees size={13}/>, swatch:'linear-gradient(135deg,#00ffaa,#00c882)' },
+  { key:'ember', label:'Ember',  icon:<Flame size={13}/>, swatch:'linear-gradient(135deg,#ff9500,#e07800)' },
 ];
 
 function useTheme(): [ThemeKey, (k: ThemeKey) => void] {
-  const [theme, setThemeState] = useState<ThemeKey>(
-    () => (localStorage.getItem('hms_theme') as ThemeKey) || 'midnight'
-  );
+  const [theme, setThemeState] = useState<ThemeKey>(() => {
+    const stored = localStorage.getItem('hms_theme');
+    // Migrate old theme keys
+    if (stored === 'dark') return 'midnight';
+    if (stored === 'light') return 'daybreak';
+    if (stored === 'midnight' || stored === 'aurora' || stored === 'daybreak' || stored === 'forest' || stored === 'ember') {
+      return stored as ThemeKey;
+    }
+    return 'midnight';
+  });
   const setTheme = useCallback((k: ThemeKey) => {
     document.documentElement.setAttribute('data-theme', k);
     localStorage.setItem('hms_theme', k);
@@ -2040,6 +2048,67 @@ function EditPatientModal({ patient, token, onClose, onSaved }:
 }
 
 // ─────────────────────────────────────────────
+// EditDoctorModal
+// ─────────────────────────────────────────────
+function EditDoctorModal({ doctor, token, onClose, onSaved }:
+  { doctor: Doctor; token: string; onClose: ()=>void; onSaved: ()=>void }) {
+  const [form, setForm] = useState({
+    doctor_name: doctor.DoctorName,
+    email: doctor.Email,
+    specialty: doctor.Specialty,
+    phone_number: doctor.PhoneNumber,
+    license_number: doctor.LicenseNumber || '',
+    years_of_experience: doctor.YearsOfExperience?.toString() || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr]       = useState('');
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault(); setSaving(true); setErr('');
+    try {
+      const res = await fetch(`${API}/doctors/${doctor.DoctorID}`, {
+        method:'PUT', headers:{ Authorization:`Bearer ${token}`, 'Content-Type':'application/json' },
+        body: JSON.stringify({
+          doctor_name: form.doctor_name,
+          email: form.email,
+          specialty: form.specialty,
+          phone_number: form.phone_number,
+          license_number: form.license_number || null,
+          years_of_experience: form.years_of_experience ? parseInt(form.years_of_experience) : null,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error);
+      onSaved();
+    } catch(ex: any) { setErr(ex.message); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <Modal title={`Edit — ${doctor.DoctorName}`} onClose={onClose}>
+      {err && <div className="form-error"><AlertCircle size={14}/> {err}</div>}
+      <form onSubmit={save} className="data-form" style={{ padding:0, background:'none', boxShadow:'none' }}>
+        <div className="form-row">
+          <div className="form-group"><label>Full Name *</label><input type="text" value={form.doctor_name} onChange={e=>setForm({...form,doctor_name:e.target.value})} required/></div>
+          <div className="form-group"><label>Email *</label><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} required/></div>
+        </div>
+        <div className="form-row">
+          <div className="form-group"><label>Specialty *</label><input type="text" value={form.specialty} onChange={e=>setForm({...form,specialty:e.target.value})} required/></div>
+          <div className="form-group"><label>Phone Number *</label><input type="tel" value={form.phone_number} onChange={e=>setForm({...form,phone_number:e.target.value})} required/></div>
+        </div>
+        <div className="form-row">
+          <div className="form-group"><label>License Number</label><input type="text" value={form.license_number} onChange={e=>setForm({...form,license_number:e.target.value})} placeholder="Optional"/></div>
+          <div className="form-group"><label>Years of Experience</label><input type="number" min="0" max="50" value={form.years_of_experience} onChange={e=>setForm({...form,years_of_experience:e.target.value})} placeholder="Optional"/></div>
+        </div>
+        <button type="submit" className="submit-btn" disabled={saving} style={{ marginTop:'0.5rem' }}>
+          <Save size={15}/> {saving ? 'Saving...' : 'Save Changes'}
+        </button>
+      </form>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────────────────────
 // AssignCredsModal
 // ─────────────────────────────────────────────
 function AssignCredsModal({ patient, token, onClose, onSaved }:
@@ -2901,6 +2970,7 @@ export default function App() {
 
   // Modal state
   const [editPatient, setEditPatient]         = useState<Patient|null>(null);
+  const [editDoctor, setEditDoctor]           = useState<Doctor|null>(null);
   const [assignPatient, setAssignPatient]     = useState<PatientNoCreds|null>(null);
   const [deleteConfirm, setDeleteConfirm]     = useState<Patient|null>(null);
   const [summaryFor, setSummaryFor]           = useState<{id:number;name:string}|null>(null);
@@ -2921,7 +2991,9 @@ export default function App() {
     specialty: '',
     phone_number: '',
     license_number: '',
-    years_of_experience: ''
+    years_of_experience: '',
+    username: '',
+    password: ''
   });
   const [impFile, setImpFile] = useState<File|null>(null);
   const [impVisitFile, setImpVisitFile]       = useState<File|null>(null);
@@ -3095,6 +3167,15 @@ export default function App() {
     catch(e:any) { alert(e.message); }
   };
 
+  const doDeleteDoctor = async (doctorId: number) => {
+    if (!confirm(`Are you sure you want to delete doctor #${doctorId}? This will deactivate their account.`)) return;
+    try {
+      await apiFetch(`/doctors/${doctorId}`, { method:'DELETE' });
+      loadDoctors();
+      alert('Doctor deactivated successfully');
+    } catch(e:any) { alert(e.message); }
+  };
+
 
   const submitImportVisits = async (e: React.FormEvent) => {
     e.preventDefault(); if (!impVisitFile) return; setLoading(true);
@@ -3137,6 +3218,8 @@ export default function App() {
           email: newDoctorF.email,
           specialty: newDoctorF.specialty,
           phone_number: newDoctorF.phone_number,
+          username: newDoctorF.username,
+          password: newDoctorF.password,
           license_number: newDoctorF.license_number || '',
           years_of_experience: newDoctorF.years_of_experience ? parseInt(newDoctorF.years_of_experience) : null
         })
@@ -3150,7 +3233,9 @@ export default function App() {
         specialty: '',
         phone_number: '',
         license_number: '',
-        years_of_experience: ''
+        years_of_experience: '',
+        username: '',
+        password: ''
       });
       loadDoctors();
     } catch (err: any) {
@@ -3192,6 +3277,7 @@ export default function App() {
       {summaryFor && <SummaryModal patientId={summaryFor.id} patientName={summaryFor.name} role={user.role} token={token} onClose={()=>setSummaryFor(null)}/>}
       {scansFor   && <ScansModal   patientId={scansFor.id}   patientName={scansFor.name}   token={token} onClose={()=>setScansFor(null)}/>}
       {editPatient  && <EditPatientModal patient={editPatient} token={token} onClose={()=>setEditPatient(null)} onSaved={()=>{ setEditPatient(null); loadPatients(); }}/>}
+      {editDoctor   && <EditDoctorModal doctor={editDoctor} token={token} onClose={()=>setEditDoctor(null)} onSaved={()=>{ setEditDoctor(null); loadDoctors(); }}/>}
       {assignPatient && <AssignCredsModal patient={assignPatient} token={token} onClose={()=>setAssignPatient(null)} onSaved={()=>{ setAssignPatient(null); loadNoCreds(); loadPatients(); }}/>}
 
       {/* Doctor panel modals — rendered at root level to escape overflow:hidden ancestors */}
@@ -3275,7 +3361,7 @@ export default function App() {
               <Key/> Assign Credentials
               {noCreds.length>0&&<span style={{ marginLeft:'auto',background:'var(--rose)',color:'white',borderRadius:999,fontSize:'0.65rem',fontWeight:700,padding:'0.1rem 0.45rem' }}>{noCreds.length}</span>}
             </button>
-            <button className={view==='import'?'active':''} onClick={()=>setView('import')}><Upload/> Import Patients</button>
+            <button className={view==='import'?'active':''} onClick={()=>setView('import')}><Upload/> Import Data</button>
           </>}
         </nav>
         <div className="sidebar-footer">
@@ -3921,8 +4007,16 @@ export default function App() {
                     <label>Years of Experience</label>
                     <input type="number" min="0" max="50" value={newDoctorF.years_of_experience} onChange={e=>setNewDoctorF({...newDoctorF, years_of_experience:e.target.value})} placeholder="Optional"/>
                   </div>
+                  <div className="form-group">
+                    <label>Username (optional)</label>
+                    <input type="text" value={newDoctorF.username} onChange={e=>setNewDoctorF({...newDoctorF, username:e.target.value})} placeholder="Leave empty to auto-generate"/>
+                  </div>
+                  <div className="form-group">
+                    <label>Password (optional)</label>
+                    <input type="password" value={newDoctorF.password} onChange={e=>setNewDoctorF({...newDoctorF, password:e.target.value})} placeholder="Leave empty to auto-generate"/>
+                  </div>
                   <div style={{ gridColumn:'1/-1', display:'flex', justifyContent:'flex-end', gap:'0.75rem', marginTop:'0.5rem' }}>
-                    <button type="button" className="action-btn secondary" onClick={()=>setNewDoctorF({ doctor_name:'', email:'', specialty:'', phone_number:'', license_number:'', years_of_experience:'' })}>Clear</button>
+                    <button type="button" className="action-btn secondary" onClick={()=>setNewDoctorF({ doctor_name:'', email:'', specialty:'', phone_number:'', license_number:'', years_of_experience:'', username:'', password:'' })}>Clear</button>
                     <button type="submit" className="action-btn" disabled={loading}>{loading ? 'Adding...' : 'Add Doctor'}</button>
                   </div>
                 </form>
@@ -3940,11 +4034,12 @@ export default function App() {
                       <th>Phone</th>
                       <th>License</th>
                       <th>Experience</th>
+                      <th style={{ textAlign:'center' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {doctors.length === 0 ? (
-                      <tr><td colSpan={7} style={{ textAlign:'center', padding:'2rem', color:'var(--text-dim)' }}>No doctors found. Add a doctor using the form above.</td></tr>
+                      <tr><td colSpan={8} style={{ textAlign:'center', padding:'2rem', color:'var(--text-dim)' }}>No doctors found. Add a doctor using the form above.</td></tr>
                     ) : doctors.map(d => (
                       <tr key={d.DoctorID}>
                         <td><strong>#{d.DoctorID}</strong></td>
@@ -3954,6 +4049,51 @@ export default function App() {
                         <td><div className="contact-cell"><Phone size={14}/><span>{d.PhoneNumber}</span></div></td>
                         <td>{d.LicenseNumber || '—'}</td>
                         <td>{d.YearsOfExperience ? `${d.YearsOfExperience} years` : '—'}</td>
+                        <td style={{ textAlign:'center' }}>
+                          <div style={{ display:'flex', gap:'0.5rem', justifyContent:'center' }}>
+                            <button
+                              onClick={() => setEditDoctor(d)}
+                              style={{
+                                background: 'linear-gradient(135deg, var(--accent), #0ea5e9)',
+                                border: 'none',
+                                borderRadius: '6px',
+                                padding: '0.4rem 0.75rem',
+                                color: 'white',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                fontSize: '0.8rem',
+                                fontWeight: 700,
+                                fontFamily: "'Syne', sans-serif"
+                              }}
+                              title="Edit doctor"
+                            >
+                              <Edit2 size={13}/> Edit
+                            </button>
+                            <button
+                              onClick={() => doDeleteDoctor(d.DoctorID)}
+                              className="delete-btn"
+                              style={{
+                                background: 'linear-gradient(135deg, var(--rose), #dc2626)',
+                                border: 'none',
+                                borderRadius: '6px',
+                                padding: '0.4rem 0.75rem',
+                                color: 'white',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                fontSize: '0.8rem',
+                                fontWeight: 700,
+                                fontFamily: "'Syne', sans-serif"
+                              }}
+                              title="Delete doctor"
+                            >
+                              <Trash2 size={13}/> Delete
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

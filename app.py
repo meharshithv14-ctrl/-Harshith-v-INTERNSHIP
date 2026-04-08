@@ -12,7 +12,7 @@ Install:
   pip install flask flask-cors PyJWT pyodbc pandas openpyxl
 """
 
-from flask import Flask, request, jsonify, send_file, g
+from flask import Flask, request, jsonify, send_file, 
 from flask_cors import CORS
 import jwt
 import datetime
@@ -30,10 +30,9 @@ import pyodbc
 import sys
 
 # ── Static folder: where Vite puts its build output ──────────────────────────
-# Vite is configured to build to:  hospital-backend/static/
-# So Flask looks for  static/index.html  to serve the React SPA.
-# If you run app.py from inside hospital-backend/, the path is just "static".
-STATIC_FOLDER = os.path.join(os.path.dirname(__file__), "static")
+# Vite is configured to build to:  hospital-frontend/dist/
+# So Flask looks for  hospital-frontend/dist/index.html  to serve the React SPA.
+STATIC_FOLDER = os.path.join(os.path.dirname(__file__), "hospital-frontend", "dist")
 app = Flask(
     __name__,
     static_folder=STATIC_FOLDER,
@@ -587,6 +586,8 @@ def add_doctor():
     phone_number = str(data["phone_number"]).strip()
     license_number = str(data.get("license_number", "")).strip()
     years_of_experience = data.get("years_of_experience")
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
     
     # Validate email format
     if "@" not in email:
@@ -618,15 +619,30 @@ def add_doctor():
         doctor_id = row[0]
         
         # Also create a user account for the doctor
-        # Generate a temporary password (first 8 chars of email + "123")
-        temp_password = email.split('@')[0][:8] + "123"
-        username = email.split('@')[0]  # Use email prefix as username
+        # Determine username and password
+        if username:  # admin provided a username
+            # Check if username already exists
+            cur.execute("SELECT 1 FROM Users WHERE Username = ?", username)
+            if cur.fetchone():
+                return jsonify({"error": "Username already taken"}), 409
+        else:
+            # Auto-generate username from email prefix
+            username = email.split('@')[0]
+            # Check if username already exists
+            cur.execute("SELECT 1 FROM Users WHERE Username = ?", username)
+            if cur.fetchone():
+                # If username exists, append doctor_id
+                username = f"{username}{doctor_id}"
         
-        # Check if username already exists
-        cur.execute("SELECT 1 FROM Users WHERE Username = ?", username)
-        if cur.fetchone():
-            # If username exists, append doctor_id
-            username = f"{username}{doctor_id}"
+        if password:
+            # Use provided password
+            temp_password = password
+            # Validate password length
+            if len(temp_password) < 6:
+                return jsonify({"error": "Password must be at least 6 characters"}), 400
+        else:
+            # Generate a temporary password (first 8 chars of email + "123")
+            temp_password = email.split('@')[0][:8] + "123"
         
         cur.execute("""
             INSERT INTO Users (Username, PasswordHash, Email, Role, DoctorID)
@@ -634,13 +650,47 @@ def add_doctor():
         """, (username, hash_password(temp_password), email, doctor_id))
         
         conn.commit()
+        note = "Doctor user account created"
+        if not password:
+            note += " with auto-generated temporary password"
+        else:
+            note += " with provided password"
         return jsonify({
             "message": "Doctor added successfully",
             "doctor_id": doctor_id,
             "username": username,
             "temp_password": temp_password,
-            "note": "Doctor user account created with temporary password"
+            "note": note
         }), 201
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        cur.close(); conn.close()
+
+
+@app.route("/api/doctors/<int:doctor_id>", methods=["DELETE"])
+@login_required
+def delete_doctor(doctor_id: int):
+    """Delete/deactivate a doctor (admin only)."""
+    user = current_user()
+    if user.get("role") != "Admin":
+        return jsonify({"error": "Admin access required"}), 403
+    
+    conn = get_db(); cur = conn.cursor()
+    try:
+        # Check if doctor exists and is active
+        cur.execute("SELECT DoctorID FROM Doctors WHERE DoctorID = ? AND IsActive = 1", doctor_id)
+        if cur.fetchone() is None:
+            return jsonify({"error": "Doctor not found"}), 404
+        
+        # Soft delete: set IsActive = 0 in Doctors table
+        cur.execute("UPDATE Doctors SET IsActive = 0 WHERE DoctorID = ?", doctor_id)
+        # Also deactivate the user account
+        cur.execute("UPDATE Users SET IsActive = 0 WHERE DoctorID = ?", doctor_id)
+        
+        conn.commit()
+        return jsonify({"message": "Doctor deactivated successfully"})
     except Exception as exc:
         conn.rollback()
         return jsonify({"error": str(exc)}), 500
@@ -1480,6 +1530,80 @@ def delete_lab_test(tid: int):
     finally:
         cur.close(); conn.close()
 
+@app.route("/api/doctors/<int:doctor_id>", methods=["PUT"])
+@login_required
+def update_doctor(doctor_id: int):
+    """Update doctor details (admin only)."""
+    user = current_user()
+    if user.get("role") != "Admin":
+        return jsonify({"error": "Admin access required"}), 403
+    
+    data = request.get_json(silent=True) or {}
+    # Fields that can be updated
+    doctor_name = data.get("doctor_name")
+    email = data.get("email")
+    specialty = data.get("specialty")
+    phone_number = data.get("phone_number")
+    license_number = data.get("license_number")
+    years_of_experience = data.get("years_of_experience")
+    
+    # At least one field must be provided
+    if not any([doctor_name, email, specialty, phone_number, license_number is not None, years_of_experience is not None]):
+        return jsonify({"error": "No fields to update"}), 400
+    
+    conn = get_db(); cur = conn.cursor()
+    try:
+        # Check if doctor exists and is active
+        cur.execute("SELECT DoctorID, Email FROM Doctors WHERE DoctorID = ? AND IsActive = 1", doctor_id)
+        row = cur.fetchone()
+        if row is None:
+            return jsonify({"error": "Doctor not found"}), 404
+        
+        current_email = row.Email
+        
+        # Build dynamic update query
+        updates = []
+        params = []
+        if doctor_name is not None:
+            updates.append("DoctorName = ?")
+            params.append(str(doctor_name).strip())
+        if email is not None:
+            new_email = str(email).strip()
+            if "@" not in new_email:
+                return jsonify({"error": "Invalid email format"}), 400
+            # Check if email already exists for another doctor
+            cur.execute("SELECT 1 FROM Doctors WHERE Email = ? AND DoctorID != ? AND IsActive = 1", (new_email, doctor_id))
+            if cur.fetchone():
+                return jsonify({"error": "Email already in use by another doctor"}), 409
+            updates.append("Email = ?")
+            params.append(new_email)
+            # Also update Users table email if it matches the current email
+            cur.execute("UPDATE Users SET Email = ? WHERE Email = ? AND DoctorID = ?", (new_email, current_email, doctor_id))
+        if specialty is not None:
+            updates.append("Specialty = ?")
+            params.append(str(specialty).strip())
+        if phone_number is not None:
+            updates.append("PhoneNumber = ?")
+            params.append(str(phone_number).strip())
+        if license_number is not None:
+            updates.append("LicenseNumber = ?")
+            params.append(str(license_number).strip() if license_number != "" else None)
+        if years_of_experience is not None:
+            updates.append("YearsOfExperience = ?")
+            params.append(int(years_of_experience) if years_of_experience != "" else None)
+        
+        params.append(doctor_id)
+        query = f"UPDATE Doctors SET {', '.join(updates)} WHERE DoctorID = ?"
+        cur.execute(query, params)
+        
+        conn.commit()
+        return jsonify({"message": "Doctor updated successfully"})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        cur.close(); conn.close()
+
 # ═══════════════════════════════════════════════
 #  1-YEAR DATA RETENTION — purge old patient records
 # ═══════════════════════════════════════════════
@@ -2302,10 +2426,10 @@ def download_import_template():
 def serve_react(path: str):
     """
     Serve the built React app for ALL non-API routes.
-    - If the file exists in static/dist/ (JS, CSS, assets), serve it directly.
+    - If the file exists in hospital-frontend/dist/ (JS, CSS, assets), serve it directly.
     - Otherwise serve index.html so React Router handles the URL.
     """
-    dist_dir = os.path.join(os.path.dirname(__file__), "static", "dist")
+    dist_dir = os.path.join(os.path.dirname(__file__), "hospital-frontend", "dist")
 
     # If no build exists yet, return a helpful message
     if not os.path.isdir(dist_dir):
